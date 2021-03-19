@@ -47,6 +47,9 @@ from .exceptions import RequestsDependencyWarning
 
 
 def check_compatibility(urllib3_version, chardet_version):
+    """
+    check versions of urllib3, chardet
+    """
     urllib3_version = urllib3_version.split('.')
     assert urllib3_version != ['dev']  # Verify urllib3 isn't installed from git.
 
@@ -99,6 +102,7 @@ try:
 
     if not getattr(ssl, "HAS_SNI", False):
         from urllib3.contrib import pyopenssl
+        # Comment: Monkey-patch urllib3 with PyOpenSSL-backed SSL-support
         pyopenssl.inject_into_urllib3()
 
         # Check cryptography version

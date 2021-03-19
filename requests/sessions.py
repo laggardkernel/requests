@@ -59,13 +59,15 @@ def merge_setting(request_setting, session_setting, dict_class=OrderedDict):
     if request_setting is None:
         return session_setting
 
+    # TODO(lk): ?
     # Bypass if not a dictionary (e.g. verify)
     if not (
             isinstance(session_setting, Mapping) and
             isinstance(request_setting, Mapping)
     ):
         return request_setting
-
+    # Co(lk): convert into [('key', 'val')] and save as OrderedDict
+    #  requests > session settings, overrides
     merged_setting = dict_class(to_key_val_list(session_setting))
     merged_setting.update(to_key_val_list(request_setting))
 
@@ -103,8 +105,15 @@ class SessionRedirectMixin(object):
         # If a custom mixin is used to handle this logic, it may be advantageous
         # to cache the redirect location onto the response object as a private
         # attribute.
+        # TODO(lk): why called twice on subsequent redirect res?
         if resp.is_redirect:
             location = resp.headers['location']
+            """
+            腾讯乐享 header 中包含 non-ASCII 字符，macOS chrome,
+            Windows Chrome 处理方式不同。一个用 latin 编解码，一个用 ascii 编解码。
+            这里说的就是这种情况：HTTP 规范 Header 编码解码为 latin1，但某些客户端
+            会发送 non-ASCII 字符过来，需要 utf8 解码
+            """
             # Currently the underlying http module on py3 decode headers
             # in latin1, but empirical evidence suggests that latin1 is very
             # rarely used with non-ASCII characters in HTTP headers.
@@ -118,6 +127,7 @@ class SessionRedirectMixin(object):
 
     def should_strip_auth(self, old_url, new_url):
         """Decide whether Authorization header should be removed when redirecting"""
+        # Co(lk): Strip auth when host or schema is changed
         old_parsed = urlparse(old_url)
         new_parsed = urlparse(new_url)
         if old_parsed.hostname != new_parsed.hostname:
@@ -134,6 +144,7 @@ class SessionRedirectMixin(object):
         changed_port = old_parsed.port != new_parsed.port
         changed_scheme = old_parsed.scheme != new_parsed.scheme
         default_port = (DEFAULT_PORTS.get(old_parsed.scheme, None), None)
+        # Co(lk): New port is default None, or same as old ports
         if (not changed_scheme and old_parsed.port in default_port
                 and new_parsed.port in default_port):
             return False
@@ -158,6 +169,7 @@ class SessionRedirectMixin(object):
             resp.history = hist[1:]
 
             try:
+                # TODO(lk): black magic! check HTTPResponse.stream(), seems close sth
                 resp.content  # Consume socket so it can be released
             except (ChunkedEncodingError, ContentDecodingError, RuntimeError):
                 resp.raw.read(decode_content=False)
@@ -187,6 +199,7 @@ class SessionRedirectMixin(object):
             if not parsed.netloc:
                 url = urljoin(resp.url, requote_uri(url))
             else:
+                # Co(lk): ensure Location URL is safely quoted
                 url = requote_uri(url)
 
             prepared_request.url = to_native_string(url)
@@ -223,6 +236,8 @@ class SessionRedirectMixin(object):
                 ('Content-Length' in headers or 'Transfer-Encoding' in headers)
             )
 
+            # Co(lk): ._body_position is recorded during request preparation.
+            #  Guess data/body is read during streaming.
             # Attempt to rewind consumed file-like object.
             if rewindable:
                 rewind_body(prepared_request)
@@ -259,6 +274,7 @@ class SessionRedirectMixin(object):
         headers = prepared_request.headers
         url = prepared_request.url
 
+        # Co(lk): Reuse former URL (before redirect) auth or not?
         if 'Authorization' in headers and self.should_strip_auth(response.request.url, url):
             # If we get redirected to a new host, we should strip out any
             # authentication headers.
@@ -290,6 +306,7 @@ class SessionRedirectMixin(object):
         no_proxy = proxies.get('no_proxy')
 
         bypass_proxy = should_bypass_proxies(url, no_proxy=no_proxy)
+        # Co(lk): get proxy from environment variables?
         if self.trust_env and not bypass_proxy:
             environ_proxies = get_environ_proxies(url, no_proxy=no_proxy)
 
@@ -298,6 +315,8 @@ class SessionRedirectMixin(object):
             if proxy:
                 new_proxies.setdefault(scheme, proxy)
 
+        # Co(lk): Get auth from url https://user:pass@foo.bar, and set it in
+        #  Proxy-Authorization header
         if 'Proxy-Authorization' in headers:
             del headers['Proxy-Authorization']
 
@@ -425,6 +444,7 @@ class Session(SessionRedirectMixin):
         return self
 
     def __exit__(self, *args):
+        # Co(lk): close adapters before closing current session
         self.close()
 
     def prepare_request(self, request):
@@ -443,7 +463,8 @@ class Session(SessionRedirectMixin):
         if not isinstance(cookies, cookielib.CookieJar):
             cookies = cookiejar_from_dict(cookies)
 
-        # Merge with session cookies
+        # Co(lk): merge_cookies(cookiejar, cookies), merged into the 1st cookiejar
+        #  Merge with session cookies
         merged_cookies = merge_cookies(
             merge_cookies(RequestsCookieJar(), self.cookies), cookies)
 
@@ -506,7 +527,7 @@ class Session(SessionRedirectMixin):
             ``False``, requests will accept any TLS certificate presented by
             the server, and will ignore hostname mismatches and/or expired
             certificates, which will make your application vulnerable to
-            man-in-the-middle (MitM) attacks. Setting verify to ``False`` 
+            man-in-the-middle (MitM) attacks. Setting verify to ``False``
             may be useful during local development or testing.
         :param cert: (optional) if String, path to ssl client cert file (.pem).
             If Tuple, ('cert', 'key') pair.
@@ -525,10 +546,12 @@ class Session(SessionRedirectMixin):
             cookies=cookies,
             hooks=hooks,
         )
+        # Co(lk): params from .request() override Session params
         prep = self.prepare_request(req)
 
         proxies = proxies or {}
 
+        # Co(lk): req param > env param > session param
         settings = self.merge_environment_settings(
             prep.url, proxies, stream, verify, cert
         )
@@ -667,7 +690,7 @@ class Session(SessionRedirectMixin):
             # If the hooks create history then we want those cookies too
             for resp in r.history:
                 extract_cookies_to_jar(self.cookies, resp.request, resp.raw)
-
+        # save cookies into session
         extract_cookies_to_jar(self.cookies, request, r.raw)
 
         # Resolve redirects if allowed.
@@ -747,16 +770,19 @@ class Session(SessionRedirectMixin):
             v.close()
 
     def mount(self, prefix, adapter):
+        # Comment: put long prefix in front of OrderedDict
         """Registers a connection adapter to a prefix.
 
         Adapters are sorted in descending order by prefix length.
         """
+        # Co(lk): what, sort by key length?
         self.adapters[prefix] = adapter
         keys_to_move = [k for k in self.adapters if len(k) < len(prefix)]
 
         for key in keys_to_move:
             self.adapters[key] = self.adapters.pop(key)
 
+    # Co(lk): __getstate__, __setstate__ for pickle usage
     def __getstate__(self):
         state = {attr: getattr(self, attr, None) for attr in self.__attrs__}
         return state

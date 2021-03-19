@@ -323,6 +323,7 @@ class PreparedRequest(RequestEncodingMixin, RequestHooksMixin):
         # such as OAuth to work on a fully prepared request.
 
         # This MUST go after prepare_auth. Authenticators could add a hook
+        # Co(lk): register hooks
         self.prepare_hooks(hooks)
 
     def __repr__(self):
@@ -553,6 +554,7 @@ class PreparedRequest(RequestEncodingMixin, RequestHooksMixin):
             # Update self to reflect the auth changes.
             self.__dict__.update(r.__dict__)
 
+            # TODO(lk): why recalc length
             # Recompute Content-Length
             self.prepare_content_length(self.body)
 
@@ -652,6 +654,7 @@ class Response(object):
     def __getstate__(self):
         # Consume everything; accessing the content attribute makes
         # sure the content has been fully read.
+        # TODO(lk): read the HTTPResponse or stream object
         if not self._content_consumed:
             self.content
 
@@ -776,13 +779,18 @@ class Response(object):
         reused_chunks = iter_slices(self._content, chunk_size)
 
         stream_chunks = generate()
-
+        """
+        ._content v.s. .raw
+        .raw: HTTPResponse from urllib3
+        _content, triggers reading from raw and store bytes into ._content
+        _content is cached read
+        """
         chunks = reused_chunks if self._content_consumed else stream_chunks
 
         if decode_unicode:
             chunks = stream_decode_response_unicode(chunks, self)
 
-        return chunks
+        return chunks  # generator
 
     def iter_lines(self, chunk_size=ITER_CHUNK_SIZE, decode_unicode=False, delimiter=None):
         """Iterates over the response data, one line at a time.  When

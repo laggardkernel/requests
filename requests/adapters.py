@@ -351,6 +351,7 @@ class HTTPAdapter(BaseAdapter):
 
         url = request.path_url
         if is_proxied_http_request and not using_socks_proxy:
+            # Comment: remove fragment from request url
             url = urldefragauth(request.url)
 
         return url
